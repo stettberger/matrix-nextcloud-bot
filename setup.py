@@ -7,6 +7,7 @@ setup(
    author='Christian Dietrich',
    author_email='stettberger@dokucode.de',
    packages=['mnb'],  #same as name
-   install_requires=['nio', 'xdg'], #external packages as dependencies
+   install_requires=['nio', 'xdg',
+                     'nextcloud @ git+https://github.com/EnterpriseyIntranet/nextcloud-API.git'], #external packages as dependencies
    scripts=["bin/matrix-nextcloud-bot"]
 )

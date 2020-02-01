@@ -13,6 +13,8 @@ from nio import responses
 from nio.client.async_client import AsyncClient, AsyncClientConfig, SyncError
 from xdg import XDG_CONFIG_HOME, XDG_DATA_HOME
 
+from mnb.nextcloud import Nextcloud
+
 
 class MatrixNextcloudBot:
     def __init__(self):
@@ -35,6 +37,12 @@ class MatrixNextcloudBot:
 
         self.timestamp_minimum = {}
 
+        self.nextcloud = Nextcloud(
+            self.config('nextcloud.server'),
+            self.config('nextcloud.user'),
+            self.config('nextcloud.password'))
+
+
 
     def die(self, msg, *args):
         logging.error(msg, *args)
@@ -52,6 +60,16 @@ class MatrixNextcloudBot:
             del parts[0]
         return ret
 
+    def room_config(self, matrix_room):
+        for room in self.config("matrix.rooms", []):
+            ids = (room, getattr(matrix_room, "room_id"), getattr(matrix_room, "canonical_alias"))
+            if "canonical_alias" in room:
+                if room['canonical_alias'] in ids:
+                    return room
+            if "room_id" in room:
+                if room['room_id'] in ids:
+                    return room
+
     async def main(self):
         config = AsyncClientConfig(
             # FIXME: store=nio.store.database.DefaultStore,
@@ -68,15 +86,15 @@ class MatrixNextcloudBot:
         logging.info("Matrix Login: %s", login)
 
         # Register all the events
-        for event in (events.RoomMessageText, events.InviteMemberEvent):
+        for event in (events.RoomMessageText, events.InviteMemberEvent, events.RoomMessageImage):
             cb_name   = "event_{}".format(event.__name__)
             cb_method = getattr(self, cb_name)
             self.client.add_event_callback(cb_method, event)
 
         # Sync loop
+        sync_token = self.get_sync_token()
         while True:
             # Sync with the server
-            sync_token = self.get_sync_token()
             self.sync_response = await self.client.sync(timeout=30000,
                                                    full_state=True,
                                                    since=sync_token)
@@ -90,6 +108,7 @@ class MatrixNextcloudBot:
             token = self.sync_response.next_batch
             if token and sync_token != token:
                 sync_token = token
+                # Comment the next line for debugging
                 self.set_sync_token(token)
 
             # Sleep for a second to save power
@@ -110,7 +129,7 @@ class MatrixNextcloudBot:
 
     async def event_RoomMessageText(self, room, event):
         # Ignore old messages after join
-        if self.timestamp_minimum.get(room.room_id) > event.server_timestamp:
+        if self.timestamp_minimum.get(room.room_id, 0) > event.server_timestamp:
             return
         
         logging.debug(
@@ -120,8 +139,31 @@ class MatrixNextcloudBot:
         )
 
         # Mark messages as read
+        await self.room_read_markers(room.room_id, event.event_id, event.event_id)
+
+    async def event_RoomMessageImage(self, room, event):
+        # Ignore old messages after join
+        if self.timestamp_minimum.get(room.room_id, 0) > event.server_timestamp:
+            return
+
+        room_config = self.room_config(room)
+        if not (room_config
+                and room_config.get("nextcloud")
+                and room_config["nextcloud"].get("images")):
+            return
+        target_dir = room_config["nextcloud"]["images"]
+        file_name = event.body
+        http_url = await self.client.mxc_to_http(event.url)
+
+        success, msg = self.nextcloud.upload(target_dir, file_name, url=http_url)
+
+        await self.send_message(room.room_id, f"nextcloud: {msg}")
+
+        # Mark messages as read
         # self.client.room_read_markers
-        response = await self.room_read_markers(room.room_id, event.event_id, event.event_id)
+        await self.room_read_markers(room.room_id, event.event_id, event.event_id)
+
+        
 
     async def event_InviteMemberEvent(self, room, event):
         if event.membership != "invite": return
@@ -132,9 +174,20 @@ class MatrixNextcloudBot:
             logging.info("Joined %s", room_name)
         else:
             logging.info("Error joining %s", response)
+            return
 
         self.timestamp_minimum[room.room_id] = time.time()
 
+        msg = self.config("matrix.welcome_message", None)
+        if msg:
+            await self.send_message(room.room_id, msg)
+
+    async def send_message(self, room_id, msg):
+        content = {
+            "body": msg,
+            "msgtype": "m.text"
+        }
+        return await self.client.room_send(room_id, 'm.room.message', content)
 
     async def room_read_markers(self, room_id, fully_read_event, read_event=None):
         # This should be in nio.client.async.AyncClient
