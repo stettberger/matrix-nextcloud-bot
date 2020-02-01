@@ -79,9 +79,10 @@ class MatrixNextcloudBot:
     def room_timestamp(self, room_id):
         return self.__timestamps.get(room_id, 0)
 
-    def room_update_timestamp(self, room_id):
-        logging.debug("updated timestamp")
-        self.__timestamps[room_id] = int(time.time() * 1000)
+    def room_update_timestamp(self, room_id, value=None):
+        if value is None:
+            value = int(time.time() * 1000)
+        self.__timestamps[room_id] = value
         with open(self.__timestamp_file, "w+") as fd:
             fd.write(repr(self.__timestamps))
 
@@ -178,8 +179,7 @@ class MatrixNextcloudBot:
         # Mark messages as read
         # self.client.room_read_markers
         await self.room_read_markers(room.room_id, event.event_id, event.event_id)
-
-        
+        self.room_update_timestamp(room.room_id, event.server_timestamp)
 
     async def event_InviteMemberEvent(self, room, event):
         if event.membership != "invite": return
@@ -203,7 +203,6 @@ class MatrixNextcloudBot:
             "body": msg,
             "msgtype": "m.text"
         }
-        self.room_update_timestamp(room_id)
         return await self.client.room_send(room_id, 'm.room.message', content)
 
     async def room_read_markers(self, room_id, fully_read_event, read_event=None):
