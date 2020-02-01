@@ -35,13 +35,19 @@ class MatrixNextcloudBot:
         except:
             self.die("Config not found: %s", config_fn)
 
-        self.timestamp_minimum = {}
+        self.__timestamp_file = os.path.join(self.data_dir, "timestamps")
+        try:
+            with open(self.__timestamp_file) as fd:
+                self.__timestamps = eval(fd.read())
+
+        except:
+            logging.info("Could not read timestamp file")
+            self.__timestamps = {}
 
         self.nextcloud = Nextcloud(
             self.config('nextcloud.server'),
             self.config('nextcloud.user'),
             self.config('nextcloud.password'))
-
 
 
     def die(self, msg, *args):
@@ -69,6 +75,16 @@ class MatrixNextcloudBot:
             if "room_id" in room:
                 if room['room_id'] in ids:
                     return room
+
+    def room_timestamp(self, room_id):
+        return self.__timestamps.get(room_id, 0)
+
+    def room_update_timestamp(self, room_id):
+        logging.debug("updated timestamp")
+        self.__timestamps[room_id] = int(time.time() * 1000)
+        with open(self.__timestamp_file, "w+") as fd:
+            fd.write(repr(self.__timestamps))
+
 
     async def main(self):
         config = AsyncClientConfig(
@@ -129,9 +145,9 @@ class MatrixNextcloudBot:
 
     async def event_RoomMessageText(self, room, event):
         # Ignore old messages after join
-        if self.timestamp_minimum.get(room.room_id, 0) > event.server_timestamp:
+        if self.room_timestamp(room.room_id) > event.server_timestamp:
             return
-        
+
         logging.debug(
             "{} | {}: {}".format(
                 room.display_name, room.user_name(event.sender), event.body
@@ -143,7 +159,7 @@ class MatrixNextcloudBot:
 
     async def event_RoomMessageImage(self, room, event):
         # Ignore old messages after join
-        if self.timestamp_minimum.get(room.room_id, 0) > event.server_timestamp:
+        if self.room_timestamp(room.room_id) > event.server_timestamp:
             return
 
         room_config = self.room_config(room)
@@ -176,7 +192,7 @@ class MatrixNextcloudBot:
             logging.info("Error joining %s", response)
             return
 
-        self.timestamp_minimum[room.room_id] = time.time()
+        self.room_update_timestamp(room.room_id)
 
         msg = self.config("matrix.welcome_message", None)
         if msg:
@@ -187,6 +203,7 @@ class MatrixNextcloudBot:
             "body": msg,
             "msgtype": "m.text"
         }
+        self.room_update_timestamp(room_id)
         return await self.client.room_send(room_id, 'm.room.message', content)
 
     async def room_read_markers(self, room_id, fully_read_event, read_event=None):
