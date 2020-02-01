@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 from mnb.bot import MatrixNextcloudBot
+import asyncio
 
 bot = MatrixNextcloudBot()
 asyncio.get_event_loop().run_until_complete(bot.main())
